@@ -1,7 +1,7 @@
 rm -rf include
 rm -rf src
 
-tag=AudioUnitSDK-1.2.0
+tag=AudioUnitSDK-1.1.0
 wget https://github.com/apple/AudioUnitSDK/archive/refs/tags/$tag.tar.gz
 tar -xf $tag.tar.gz
 rm $tag.tar.gz

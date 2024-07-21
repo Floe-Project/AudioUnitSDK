@@ -1,10 +1,7 @@
 /*!
 	@file		AudioUnitSDK/AUBase.cpp
-	@copyright	© 2000-2023 Apple Inc. All rights reserved.
+	@copyright	© 2000-2021 Apple Inc. All rights reserved.
 */
-// clang-format off
-#include <AudioUnitSDK/AUConfig.h> // must come first
-// clang-format on
 #include <AudioUnitSDK/AUBase.h>
 #include <AudioUnitSDK/AUInputElement.h>
 #include <AudioUnitSDK/AUOutputElement.h>
@@ -13,7 +10,6 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cstring>
 #include <limits>
 
 namespace ausdk {
@@ -22,35 +18,35 @@ namespace ausdk {
 
 class DenormalDisabler {
 public:
-	DenormalDisabler() noexcept : mSavedMXCSR(GetCSR()) { SetCSR(mSavedMXCSR | 0x8040); }
+	DenormalDisabler() : mSavedMXCSR(GetCSR()) { SetCSR(mSavedMXCSR | 0x8040); }
 
 	DenormalDisabler(const DenormalDisabler&) = delete;
 	DenormalDisabler(DenormalDisabler&&) = delete;
 	DenormalDisabler& operator=(const DenormalDisabler&) = delete;
 	DenormalDisabler& operator=(DenormalDisabler&&) = delete;
 
-	~DenormalDisabler() noexcept { SetCSR(mSavedMXCSR); }
+	~DenormalDisabler() { SetCSR(mSavedMXCSR); }
 
 private:
 #if 0 // not sure if this is right: // #if __has_include(<xmmintrin.h>)
-	static unsigned GetCSR() noexcept { return _mm_getcsr(); }
-	static void SetCSR(unsigned x) noexcept { _mm_setcsr(x); }
+	static unsigned GetCSR() { return _mm_getcsr(); }
+	static void SetCSR(unsigned x) { _mm_setcsr(x); }
 #else
 	// our compiler does ALL floating point with SSE
-	static unsigned GetCSR() noexcept
+	static unsigned GetCSR()
 	{
 		unsigned result{};
 		asm volatile("stmxcsr %0" : "=m"(*&result)); // NOLINT asm
 		return result;
 	}
-	static void SetCSR(unsigned a) noexcept
+	static void SetCSR(unsigned a)
 	{
 		unsigned temp = a;
 		asm volatile("ldmxcsr %0" : : "m"(*&temp)); // NOLINT asm
 	}
 #endif
 
-	const unsigned mSavedMXCSR;
+	unsigned const mSavedMXCSR;
 };
 
 #else
@@ -212,18 +208,22 @@ void AUBase::DeallocateIOBuffers()
 //
 OSStatus AUBase::DoInitialize()
 {
+	OSStatus result = noErr;
+
 	if (!mInitialized) {
-		AUSDK_Require_noerr(Initialize());
-		if (CanScheduleParameters()) {
-			mParamEventList.reserve(24); // NOLINT magic #
+		result = Initialize();
+		if (result == noErr) {
+			if (CanScheduleParameters()) {
+				mParamEventList.reserve(24); // NOLINT magic #
+			}
+			mHasBegunInitializing = true;
+			ReallocateBuffers(); // calls CreateElements()
+			mInitialized = true; // signal that it's okay to render
+			std::atomic_thread_fence(std::memory_order_seq_cst);
 		}
-		mHasBegunInitializing = true;
-		ReallocateBuffers(); // calls CreateElements()
-		mInitialized = true; // signal that it's okay to render
-		std::atomic_thread_fence(std::memory_order_seq_cst);
 	}
 
-	return noErr;
+	return result;
 }
 
 //_____________________________________________________________________________
@@ -251,15 +251,11 @@ void AUBase::Cleanup() {}
 
 //_____________________________________________________________________________
 //
-OSStatus AUBase::DoReset(AudioUnitScope inScope, AudioUnitElement inElement)
+OSStatus AUBase::Reset(AudioUnitScope /*inScope*/, AudioUnitElement /*inElement*/)
 {
 	ResetRenderTime();
-	return Reset(inScope, inElement);
+	return noErr;
 }
-
-//_____________________________________________________________________________
-//
-OSStatus AUBase::Reset(AudioUnitScope /*inScope*/, AudioUnitElement /*inElement*/) { return noErr; }
 
 //_____________________________________________________________________________
 //
@@ -319,9 +315,9 @@ OSStatus AUBase::DispatchGetPropertyInfo(AudioUnitPropertyID inID, AudioUnitScop
 		break;
 
 	case kAudioUnitProperty_ParameterList: {
-		UInt32 nParams = 0;
-		AUSDK_Require_noerr(GetParameterList(inScope, nullptr, nParams));
-		outDataSize = sizeof(AudioUnitParameterID) * nParams;
+		UInt32 nparams = 0;
+		AUSDK_Require_noerr(GetParameterList(inScope, nullptr, nparams));
+		outDataSize = sizeof(AudioUnitParameterID) * nparams;
 		outWritable = false;
 		validateElement = false;
 		break;
@@ -428,8 +424,7 @@ OSStatus AUBase::DispatchGetPropertyInfo(AudioUnitPropertyID inID, AudioUnitScop
 		outWritable = true;
 		break;
 
-
-#if AUSDK_HAVE_UI && !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE
 	case kAudioUnitProperty_IconLocation:
 		AUSDK_Require(inScope == kAudioUnitScope_Global, kAudioUnitErr_InvalidScope);
 		AUSDK_Require(HasIcon(), kAudioUnitErr_InvalidProperty);
@@ -489,8 +484,8 @@ OSStatus AUBase::DispatchGetProperty(
 		break;
 
 	case kAudioUnitProperty_ParameterList: {
-		UInt32 nParams = 0;
-		result = GetParameterList(inScope, static_cast<AudioUnitParameterID*>(outData), nParams);
+		UInt32 nparams = 0;
+		result = GetParameterList(inScope, static_cast<AudioUnitParameterID*>(outData), nparams);
 		break;
 	}
 
@@ -616,7 +611,7 @@ OSStatus AUBase::DispatchGetProperty(
 		}
 		break;
 
-#if AUSDK_HAVE_UI && !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE
 	case kAudioUnitProperty_IconLocation: {
 		const CFURLRef iconLocation = CopyIconLocation();
 		AUSDK_Require(iconLocation != nullptr, kAudioUnitErr_InvalidProperty);
@@ -749,17 +744,14 @@ OSStatus AUBase::DispatchSetProperty(AudioUnitPropertyID inID, AudioUnitScope in
 
 	case kAudioUnitProperty_AudioChannelLayout: {
 		const auto& layout = *static_cast<const AudioChannelLayout*>(inData);
+		constexpr size_t headerSize = sizeof(AudioChannelLayout) - sizeof(AudioChannelDescription);
 
-		// Check the variable-size AudioChannelLayout object size
-		constexpr size_t kHeaderSize = offsetof(AudioChannelLayout, mChannelDescriptions);
-		// - Is the memory area big enough so that AudioChannelLayout::mNumberChannelDescriptions
-		// can be read?
-		AUSDK_Require(inDataSize >= kHeaderSize, kAudioUnitErr_InvalidPropertyValue);
-		// - Is the whole size consistent?
-		AUSDK_Require(inDataSize >= kHeaderSize + layout.mNumberChannelDescriptions *
-													  sizeof(AudioChannelDescription),
+		AUSDK_Require(inDataSize >= offsetof(AudioChannelLayout, mNumberChannelDescriptions) +
+										sizeof(AudioChannelLayout::mNumberChannelDescriptions),
 			kAudioUnitErr_InvalidPropertyValue);
-
+		AUSDK_Require(inDataSize >= headerSize + layout.mNumberChannelDescriptions *
+													 sizeof(AudioChannelDescription),
+			kAudioUnitErr_InvalidPropertyValue);
 		result = SetAudioChannelLayout(inScope, inElement, &layout);
 		if (result == noErr) {
 			PropertyChanged(inID, inScope, inElement);
@@ -969,10 +961,14 @@ OSStatus AUBase::AddPropertyListener(
 OSStatus AUBase::RemovePropertyListener(AudioUnitPropertyID inID,
 	AudioUnitPropertyListenerProc inProc, void* inProcRefCon, bool refConSpecified)
 {
-	std::erase_if(mPropertyListeners, [&](auto& item) {
-		return item.propertyID == inID && item.listenerProc == inProc &&
-			   (!refConSpecified || item.listenerRefCon == inProcRefCon);
-	});
+	const auto iter =
+		std::remove_if(mPropertyListeners.begin(), mPropertyListeners.end(), [&](auto& item) {
+			return item.propertyID == inID && item.listenerProc == inProc &&
+				   (!refConSpecified || item.listenerRefCon == inProcRefCon);
+		});
+	if (iter != mPropertyListeners.end()) {
+		mPropertyListeners.erase(iter, mPropertyListeners.end());
+	}
 	return noErr;
 }
 
@@ -997,7 +993,7 @@ OSStatus AUBase::SetRenderNotification(AURenderCallback inProc, void* inRefCon)
 	}
 
 	mRenderCallbacksTouched = true;
-	mRenderCallbacks.Add(RenderCallback(inProc, inRefCon));
+	mRenderCallbacks.add(RenderCallback(inProc, inRefCon));
 	// this will do nothing if it's already in the list
 	return noErr;
 }
@@ -1006,7 +1002,7 @@ OSStatus AUBase::SetRenderNotification(AURenderCallback inProc, void* inRefCon)
 //
 OSStatus AUBase::RemoveRenderNotification(AURenderCallback inProc, void* inRefCon)
 {
-	mRenderCallbacks.Remove(RenderCallback(inProc, inRefCon));
+	mRenderCallbacks.remove(RenderCallback(inProc, inRefCon));
 	return noErr; // error?
 }
 
@@ -1210,10 +1206,11 @@ OSStatus AUBase::DoRender(AudioUnitRenderActionFlags& ioActionFlags,
 		AUSDK_Require(IsInitialized(), errorExit(kAudioUnitErr_Uninitialized));
 		if (inFramesToProcess > mMaxFramesPerSlice) {
 #ifndef AUSDK_NO_LOGGING
-			const auto now = HostTime::Current();
-			if (static_cast<double>(now - mLastTimeMessagePrinted) >
+			static UInt64 lastTimeMessagePrinted = 0;
+			const UInt64 now = HostTime::Current();
+			if (static_cast<double>(now - lastTimeMessagePrinted) >
 				mHostTimeFrequency) { // not more than once per second.
-				mLastTimeMessagePrinted = now;
+				lastTimeMessagePrinted = now;
 				AUSDK_LogError("kAudioUnitErr_TooManyFramesToProcess : inFramesToProcess=%u, "
 							   "mMaxFramesPerSlice=%u",
 					static_cast<unsigned>(inFramesToProcess),
@@ -1264,13 +1261,11 @@ OSStatus AUBase::DoRender(AudioUnitRenderActionFlags& ioActionFlags,
 		}
 
 		if (mRenderCallbacksTouched) {
-			mRenderCallbacks.Update();
-
 			AudioUnitRenderActionFlags flags = ioActionFlags | kAudioUnitRenderAction_PreRender;
-			for (const RenderCallback& rc : mRenderCallbacks) {
+			mRenderCallbacks.foreach ([&](const RenderCallback& rc) {
 				(*static_cast<AURenderCallback>(rc.mRenderNotify))(rc.mRenderNotifyRefCon, &flags,
 					&inTimeStamp, inBusNumber, inFramesToProcess, &ioData);
-			}
+			});
 		}
 
 		theError =
@@ -1285,10 +1280,10 @@ OSStatus AUBase::DoRender(AudioUnitRenderActionFlags& ioActionFlags,
 				flags |= kAudioUnitRenderAction_PostRenderError;
 			}
 
-			for (const RenderCallback& rc : mRenderCallbacks) {
+			mRenderCallbacks.foreach ([&](const RenderCallback& rc) {
 				(*static_cast<AURenderCallback>(rc.mRenderNotify))(rc.mRenderNotifyRefCon, &flags,
 					&inTimeStamp, inBusNumber, inFramesToProcess, &ioData);
-			}
+			});
 		}
 
 		// The vector's being emptied
@@ -1591,7 +1586,7 @@ bool AUBase::IsStreamFormatWritable(AudioUnitScope scope, AudioUnitElement eleme
 	case kAudioUnitScope_Output:
 		return StreamFormatWritable(scope, element);
 
-		// #warning "aliasing of global scope format should be pushed to subclasses"
+		//#warning "aliasing of global scope format should be pushed to subclasses"
 	case kAudioUnitScope_Global:
 		return StreamFormatWritable(kAudioUnitScope_Output, 0);
 	default:
@@ -1605,7 +1600,7 @@ bool AUBase::IsStreamFormatWritable(AudioUnitScope scope, AudioUnitElement eleme
 AudioStreamBasicDescription AUBase::GetStreamFormat(
 	AudioUnitScope inScope, AudioUnitElement inElement)
 {
-	// #warning "aliasing of global scope format should be pushed to subclasses"
+	//#warning "aliasing of global scope format should be pushed to subclasses"
 	AUIOElement* element = nullptr;
 
 	switch (inScope) {
@@ -1626,7 +1621,9 @@ AudioStreamBasicDescription AUBase::GetStreamFormat(
 
 OSStatus AUBase::SetBusCount(AudioUnitScope inScope, UInt32 inCount)
 {
-	AUSDK_Require(!IsInitialized(), kAudioUnitErr_Initialized);
+	if (IsInitialized()) {
+		return kAudioUnitErr_Initialized;
+	}
 
 	GetScope(inScope).SetNumberOfElements(inCount);
 	return noErr;
@@ -1641,7 +1638,7 @@ OSStatus AUBase::ChangeStreamFormat(AudioUnitScope inScope, AudioUnitElement inE
 		return noErr;
 	}
 
-	// #warning "aliasing of global scope format should be pushed to subclasses"
+	//#warning "aliasing of global scope format should be pushed to subclasses"
 	AUIOElement* element = nullptr;
 
 	switch (inScope) {
@@ -1677,12 +1674,13 @@ UInt32 AUBase::GetAudioChannelLayout(AudioUnitScope scope, AudioUnitElement elem
 
 OSStatus AUBase::RemoveAudioChannelLayout(AudioUnitScope inScope, AudioUnitElement inElement)
 {
+	OSStatus result = noErr;
 	auto& el = IOElement(inScope, inElement);
 	bool writable = false;
 	if (el.GetAudioChannelLayout(nullptr, writable) > 0) {
-		return el.RemoveAudioChannelLayout();
+		result = el.RemoveAudioChannelLayout();
 	}
-	return noErr;
+	return result;
 }
 
 OSStatus AUBase::SetAudioChannelLayout(
@@ -1694,16 +1692,22 @@ OSStatus AUBase::SetAudioChannelLayout(
 	// format
 	const UInt32 currentChannels = ioEl.GetStreamFormat().mChannelsPerFrame;
 	const UInt32 numChannelsInLayout = AUChannelLayout::NumberChannels(*inLayout);
-	AUSDK_Require(currentChannels == numChannelsInLayout, kAudioUnitErr_InvalidPropertyValue);
+	if (currentChannels != numChannelsInLayout) {
+		return kAudioUnitErr_InvalidPropertyValue;
+	}
 
 	const auto tags = GetChannelLayoutTags(inScope, inElement);
-	AUSDK_Require(!tags.empty(), kAudioUnitErr_InvalidProperty);
+	if (tags.empty()) {
+		return kAudioUnitErr_InvalidProperty;
+	}
 	const auto inTag = inLayout->mChannelLayoutTag;
 	const auto iter = std::find_if(tags.begin(), tags.end(), [&inTag](auto& tag) {
 		return tag == inTag || tag == kAudioChannelLayoutTag_UseChannelDescriptions;
 	});
 
-	AUSDK_Require(iter != tags.end(), kAudioUnitErr_InvalidPropertyValue);
+	if (iter == tags.end()) {
+		return kAudioUnitErr_InvalidPropertyValue;
+	}
 
 	return ioEl.SetAudioChannelLayout(*inLayout);
 }
@@ -1795,8 +1799,9 @@ OSStatus AUBase::SaveState(CFPropertyListRef* outData)
 // NOLINTNEXTLINE(misc-no-recursion) with DispatchSetProperty
 OSStatus AUBase::RestoreState(CFPropertyListRef plist)
 {
-	AUSDK_Require(
-		CFGetTypeID(plist) == CFDictionaryGetTypeID(), kAudioUnitErr_InvalidPropertyValue);
+	if (CFGetTypeID(plist) != CFDictionaryGetTypeID()) {
+		return kAudioUnitErr_InvalidPropertyValue;
+	}
 
 	const AudioComponentDescription desc = GetComponentDescription();
 
@@ -1804,7 +1809,9 @@ OSStatus AUBase::RestoreState(CFPropertyListRef plist)
 
 	// zeroeth step - make sure the Part key is NOT present, as this method is used
 	// to restore the GLOBAL state of the dictionary
-	AUSDK_Require(!CFDictionaryContainsKey(dict, kPartString), kAudioUnitErr_InvalidPropertyValue);
+	if (CFDictionaryContainsKey(dict, kPartString)) {
+		return kAudioUnitErr_InvalidPropertyValue;
+	}
 
 	// first step -> check the saved version in the data ref
 	// at this point we're only dealing with version==0
@@ -1813,7 +1820,9 @@ OSStatus AUBase::RestoreState(CFPropertyListRef plist)
 	AUSDK_Require(CFGetTypeID(cfnum) == CFNumberGetTypeID(), kAudioUnitErr_InvalidPropertyValue);
 	SInt32 value = 0;
 	CFNumberGetValue(cfnum, kCFNumberSInt32Type, &value);
-	AUSDK_Require(value == kCurrentSavedStateVersion, kAudioUnitErr_InvalidPropertyValue);
+	if (value != kCurrentSavedStateVersion) {
+		return kAudioUnitErr_InvalidPropertyValue;
+	}
 
 	// second step -> check that this data belongs to this kind of audio unit
 	// by checking the component subtype and manuID
@@ -1823,15 +1832,17 @@ OSStatus AUBase::RestoreState(CFPropertyListRef plist)
 	AUSDK_Require(cfnum != nullptr, kAudioUnitErr_InvalidPropertyValue);
 	AUSDK_Require(CFGetTypeID(cfnum) == CFNumberGetTypeID(), kAudioUnitErr_InvalidPropertyValue);
 	CFNumberGetValue(cfnum, kCFNumberSInt32Type, &value);
-	AUSDK_Require(
-		static_cast<UInt32>(value) == desc.componentSubType, kAudioUnitErr_InvalidPropertyValue);
+	if (static_cast<UInt32>(value) != desc.componentSubType) {
+		return kAudioUnitErr_InvalidPropertyValue;
+	}
 
 	cfnum = static_cast<CFNumberRef>(CFDictionaryGetValue(dict, kManufacturerString));
 	AUSDK_Require(cfnum != nullptr, kAudioUnitErr_InvalidPropertyValue);
 	AUSDK_Require(CFGetTypeID(cfnum) == CFNumberGetTypeID(), kAudioUnitErr_InvalidPropertyValue);
 	CFNumberGetValue(cfnum, kCFNumberSInt32Type, &value);
-	AUSDK_Require(static_cast<UInt32>(value) == desc.componentManufacturer,
-		kAudioUnitErr_InvalidPropertyValue);
+	if (static_cast<UInt32>(value) != desc.componentManufacturer) {
+		return kAudioUnitErr_InvalidPropertyValue;
+	}
 
 	// fourth step -> restore the state of all of the parameters for each scope and element
 	const auto* const data = static_cast<CFDataRef>(CFDictionaryGetValue(dict, kDataString));
@@ -1839,8 +1850,14 @@ OSStatus AUBase::RestoreState(CFPropertyListRef plist)
 		const UInt8* p = CFDataGetBytePtr(data);
 		const UInt8* const pend = p + CFDataGetLength(data); // NOLINT
 
+		// we have a zero length data, which may just mean there were no parameters to save!
+		//	if (p >= pend) return noErr;
+
 		while (p < pend) {
-			const auto scopeIdx = ExtractBigUInt32AndAdvance(p);
+			const UInt32 scopeIdx =
+				CFSwapInt32BigToHost(*reinterpret_cast<const UInt32*>(p)); // NOLINT
+			p += sizeof(UInt32);                                           // NOLINT
+
 			const auto& scope = GetScope(scopeIdx);
 			p = scope.RestoreState(p);
 		}
@@ -1923,19 +1940,15 @@ bool AUBase::SetAFactoryPresetAsCurrent(const AUPreset& inPreset)
 
 bool AUBase::HasIcon()
 {
-#if AUSDK_HAVE_UI
 	const CFURLRef url = CopyIconLocation();
 	if (url != nullptr) {
 		CFRelease(url);
 		return true;
 	}
-#endif // AUSDK_HAVE_UI
 	return false;
 }
 
-#if AUSDK_HAVE_UI
 CFURLRef AUBase::CopyIconLocation() { return nullptr; }
-#endif // AUSDK_HAVE_UI
 
 //_____________________________________________________________________________
 //
@@ -2035,14 +2048,14 @@ std::string AUBase::CreateLoggingString() const
 {
 	const auto desc = GetComponentDescription();
 	std::array<char, 32> buf{};
-	[[maybe_unused]] const int printCount = snprintf(
-		buf.data(), buf.size(), "AU (%p): ", static_cast<void*>(GetComponentInstance())); // NOLINT
+	[[maybe_unused]] const int printCount =
+		snprintf(buf.data(), buf.size(), "AU (%p): ", GetComponentInstance()); // NOLINT
 #if DEBUG
 	assert(printCount < static_cast<int>(buf.size()));
 #endif
-	return buf.data() + MakeStringFrom4CC(desc.componentType) + '/' +
-		   MakeStringFrom4CC(desc.componentSubType) + '/' +
-		   MakeStringFrom4CC(desc.componentManufacturer);
+	return buf.data() + make_string_from_4cc(desc.componentType) + '/' +
+		   make_string_from_4cc(desc.componentSubType) + '/' +
+		   make_string_from_4cc(desc.componentManufacturer);
 }
 
 } // namespace ausdk

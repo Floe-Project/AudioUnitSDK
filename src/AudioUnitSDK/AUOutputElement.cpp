@@ -1,10 +1,9 @@
 /*!
 	@file		AudioUnitSDK/AUOutputElement.cpp
-	@copyright	© 2000-2023 Apple Inc. All rights reserved.
+	@copyright	© 2000-2021 Apple Inc. All rights reserved.
 */
 #include <AudioUnitSDK/AUBase.h>
 #include <AudioUnitSDK/AUOutputElement.h>
-#include <AudioUnitSDK/AUUtility.h>
 
 namespace ausdk {
 
@@ -18,9 +17,11 @@ AUOutputElement::AUOutputElement(AUBase& audioUnit, const AudioStreamBasicDescri
 
 OSStatus AUOutputElement::SetStreamFormat(const AudioStreamBasicDescription& desc)
 {
-	AUSDK_Require_noerr(AUIOElement::SetStreamFormat(desc)); // inherited
-	AllocateBuffer();
-	return noErr;
+	const OSStatus result = AUIOElement::SetStreamFormat(desc); // inherited
+	if (result == noErr) {
+		AllocateBuffer();
+	}
+	return result;
 }
 
 } // namespace ausdk

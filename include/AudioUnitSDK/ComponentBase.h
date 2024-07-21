@@ -1,18 +1,15 @@
 /*!
 	@file		AudioUnitSDK/ComponentBase.h
-	@copyright	© 2000-2023 Apple Inc. All rights reserved.
+	@copyright	© 2000-2021 Apple Inc. All rights reserved.
 */
 #ifndef AudioUnitSDK_ComponentBase_h
 #define AudioUnitSDK_ComponentBase_h
 
 // module
-// clang-format off
-#include <AudioUnitSDK/AUConfig.h> // must come first
-// clang-format on
 #include <AudioUnitSDK/AUUtility.h>
 
 // OS
-#include <AudioToolbox/AudioComponent.h>
+#include <AudioToolbox/AudioUnit.h>
 
 // std
 #include <array>
